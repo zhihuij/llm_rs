@@ -3,6 +3,10 @@ name = "llm_rs"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "llm_rs"
+path = "src/llm.rs"
+
 [dependencies]
 byteorder = "1.5.0"
 memmap2 = "0.9.4"
