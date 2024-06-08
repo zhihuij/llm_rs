@@ -8,7 +8,6 @@ use rayon::prelude::*;
 use crate::{
     constants::{F32_SIZE, I32_SIZE},
     run_state::RunState,
-    utils,
 };
 
 #[derive(Debug)]
