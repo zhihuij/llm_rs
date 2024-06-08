@@ -10,7 +10,8 @@ cargo run --bin llm_rs
 
 ## History
 
-* [v0.0.1][v0.0.1]: Initial version.
+* [v0.0.1][https://github.com/zhihuij/]: Initial version (6.05 token/s)
+* [v0.0.2][https://github.com/zhihuij/]: Data Parallelism with Rayon (14.39 token/s)
 
 ## License
 

@@ -13,7 +13,7 @@ pub struct RunState {
     pub q: Vec<f32>,   // query (dim,)
     // pub k: Vec<f32>,      // key (dim,)
     // pub v: Vec<f32>,      // value (dim,)
-    pub att: Vec<f32>,    // buffer for scores/attention values (n_heads, seq_len)
+    // pub att: Vec<f32>,    // buffer for scores/attention values (n_heads, seq_len)
     pub logits: Vec<f32>, // output logits
     // kv cache
     pub key_cache: Vec<f32>,   // (layer, seq_len, dim)
@@ -53,8 +53,8 @@ impl RunState {
             model_config.n_layers * model_config.seq_len * kv_dim,
             || 0.0,
         );
-        let mut att: Vec<f32> = Vec::new();
-        att.resize_with(model_config.n_heads * model_config.seq_len, || 0.0);
+        // let mut att: Vec<f32> = Vec::new();
+        // att.resize_with(model_config.n_heads * model_config.seq_len, || 0.0);
         let mut logits: Vec<f32> = Vec::new();
         logits.resize_with(model_config.vocab_size, || 0.0);
 
@@ -67,7 +67,7 @@ impl RunState {
             q,
             // k,
             // v,
-            att,
+            // att,
             logits,
             key_cache,
             value_cache,

@@ -1,5 +1,4 @@
 use std::io::{self, Write};
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::usize;
 
 mod constants;
@@ -7,17 +6,11 @@ mod model;
 mod run_state;
 mod sample;
 mod tokenizer;
+mod utils;
 
 use model::Transformer;
 use sample::Sampler;
 use tokenizer::Tokenizer;
-
-fn time_in_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("get time error")
-        .as_millis()
-}
 
 fn genrate(
     transformer: &mut Transformer,
@@ -65,13 +58,13 @@ fn genrate(
         token = next;
         // init the timer here because the first iteration can be slower
         if start == 0 {
-            start = time_in_ms();
+            start = utils::time_in_ms();
         }
     }
     println!("");
     // report achieved tok/s (pos-1 because the timer starts after first iteration)
     if pos > 1 {
-        let end = time_in_ms();
+        let end = utils::time_in_ms();
         println!(
             "achieved tok/s: {:?}\n",
             (pos - 1) as f64 / (end - start) as f64 * 1000.0,
@@ -80,7 +73,7 @@ fn genrate(
 }
 
 fn main() {
-    let temperature: f32 = 1.0; // 0.0 = greedy deterministic. 1.0 = original. don't set higher
+    let temperature: f32 = 0.0; // 0.0 = greedy deterministic. 1.0 = original. don't set higher
     let topp: f32 = 0.9; // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
     let steps: usize = 256; // number of steps to run for
     let rng_seed: u64 = 1234; // seed rng with time by default

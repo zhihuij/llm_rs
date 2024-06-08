@@ -3,10 +3,12 @@ use std::io::Result;
 
 use byteorder::{ByteOrder, LittleEndian};
 use memmap2::Mmap;
+use rayon::prelude::*;
 
 use crate::{
     constants::{F32_SIZE, I32_SIZE},
     run_state::RunState,
+    utils,
 };
 
 #[derive(Debug)]
@@ -252,13 +254,77 @@ impl Transformer {
     fn matmul(xout: &mut [f32], x: &[f32], w: &[f32], n: usize, d: usize) {
         // W (d,n) @ x (n,) -> xout (d,)
         // by far the most amount of time is spent inside this little function
-        for i in 0..d {
-            let mut val: f32 = 0.0;
-            for j in 0..n {
-                val += w[i * n + j] * x[j];
+        // for i in 0..d {
+        //     let mut val: f32 = 0.0;
+        //     for j in 0..n {
+        //         val += w[i * n + j] * x[j];
+        //     }
+        //     xout[i] = val;
+        // }
+
+        // TODO: Rayon
+        let parallel: Vec<usize> = (0..d).collect();
+        let result: Vec<(usize, f32)> = parallel
+            .par_iter()
+            .map(|i| {
+                let mut val: f32 = 0.0;
+                for j in 0..n {
+                    val += w[i * n + j] * x[j];
+                }
+                (*i, val)
+            })
+            .collect();
+        result.iter().for_each(|(index, val)| xout[*index] = *val)
+    }
+
+    fn single_head_attn(
+        p: &ModelConfig,
+        h: usize,
+        head_size: usize,
+        pos: usize,
+        loff: usize,
+        kv_dim: usize,
+        kv_mul: usize,
+        s_q: &[f32],
+        s_key_cache: &[f32],
+        s_value_cache: &[f32],
+    ) -> Vec<f32> {
+        // get the query vector for this head
+        let q = &s_q[(h * head_size)..((h + 1) * head_size)];
+        // attention scores for this head
+        let mut att = &mut vec![0.0; p.seq_len][0..p.seq_len];
+
+        // iterate over all timesteps, including the current one
+        for t in 0..(pos + 1) {
+            // get the key vector for this head and at this timestep
+            let k = &s_key_cache[(loff + t * kv_dim + (h / kv_mul) * head_size)..];
+            // calculate the attention score as the dot product of q and k
+            let mut score: f32 = 0.0;
+            for i in 0..head_size {
+                score += q[i] * k[i];
             }
-            xout[i] = val;
+            score /= (head_size as f32).sqrt();
+            // save the score to the attention buffer
+            att[t] = score;
         }
+
+        // softmax the scores to get attention weights, from 0..pos inclusively
+        Transformer::softmax(&mut att, pos + 1);
+
+        // weighted sum of the values, store back into xb
+        let mut xb = vec![0.0; head_size];
+        for t in 0..(pos + 1) {
+            // get the value vector for this head and at this timestep
+            let v = &s_value_cache[(loff + t * kv_dim + (h / kv_mul) * head_size)..];
+            // get the attention weight for this timestep
+            let a = att[t];
+
+            // accumulate the weighted value into xb
+            for i in 0..head_size {
+                xb[i] += a * v[i];
+            }
+        }
+        return xb;
     }
 
     fn copy_vec(xout: &mut [f32], xin: &[f32], size: usize) {
@@ -314,45 +380,70 @@ impl Transformer {
             }
 
             // multihead attention. iterate over all heads
-            for h in 0..p.n_heads {
-                // get the query vector for this head
-                let q = &s.q[(h * head_size)..((h + 1) * head_size)];
-                // attention scores for this head
-                let mut att = &mut s.att[(h * p.seq_len)..((h + 1) * p.seq_len)];
-                // iterate over all timesteps, including the current one
-                for t in 0..(pos + 1) {
-                    // get the key vector for this head and at this timestep
-                    let k = &s.key_cache[(loff + t * kv_dim + (h / kv_mul) * head_size)..];
-                    // calculate the attention score as the dot product of q and k
-                    let mut score: f32 = 0.0;
-                    for i in 0..head_size {
-                        score += q[i] * k[i];
-                    }
-                    score /= (head_size as f32).sqrt();
-                    // save the score to the attention buffer
-                    att[t] = score;
-                }
+            let parallel: Vec<usize> = (0..p.n_heads).collect();
+            let result: Vec<(usize, Vec<f32>)> = parallel
+                .par_iter()
+                .map(|h| {
+                    let single_head = Transformer::single_head_attn(
+                        p,
+                        *h,
+                        head_size,
+                        pos,
+                        loff,
+                        kv_dim,
+                        kv_mul,
+                        &s.q,
+                        &s.key_cache,
+                        &s.value_cache,
+                    );
+                    (*h, single_head)
+                })
+                .collect();
+            result.iter().for_each(|(h, single_head)| {
+                single_head.iter().enumerate().for_each(|(i, v)| {
+                    s.xb[h * head_size + i] = *v;
+                });
+            });
 
-                // softmax the scores to get attention weights, from 0..pos inclusively
-                Transformer::softmax(&mut att, pos + 1);
+            // for h in 0..p.n_heads {
+            //     // get the query vector for this head
+            //     let q = &s.q[(h * head_size)..((h + 1) * head_size)];
+            //     // attention scores for this head
+            //     let mut att = &mut vec![0.0; p.seq_len][0..p.seq_len];
+            //     // iterate over all timesteps, including the current one
+            //     for t in 0..(pos + 1) {
+            //         // get the key vector for this head and at this timestep
+            //         let k = &s.key_cache[(loff + t * kv_dim + (h / kv_mul) * head_size)..];
+            //         // calculate the attention score as the dot product of q and k
+            //         let mut score: f32 = 0.0;
+            //         for i in 0..head_size {
+            //             score += q[i] * k[i];
+            //         }
+            //         score /= (head_size as f32).sqrt();
+            //         // save the score to the attention buffer
+            //         att[t] = score;
+            //     }
 
-                // weighted sum of the values, store back into xb
-                let xb = &mut s.xb[(h * head_size)..((h + 1) * head_size)];
-                for i in 0..head_size {
-                    xb[i] = 0.0;
-                }
-                for t in 0..(pos + 1) {
-                    // get the value vector for this head and at this timestep
-                    let v = &s.value_cache[(loff + t * kv_dim + (h / kv_mul) * head_size)..];
-                    // get the attention weight for this timestep
-                    let a = att[t];
+            //     // softmax the scores to get attention weights, from 0..pos inclusively
+            //     Transformer::softmax(&mut att, pos + 1);
 
-                    // accumulate the weighted value into xb
-                    for i in 0..head_size {
-                        xb[i] += a * v[i];
-                    }
-                }
-            }
+            //     // weighted sum of the values, store back into xb
+            //     let xb = &mut s.xb[(h * head_size)..((h + 1) * head_size)];
+            //     for i in 0..head_size {
+            //         xb[i] = 0.0;
+            //     }
+            //     for t in 0..(pos + 1) {
+            //         // get the value vector for this head and at this timestep
+            //         let v = &s.value_cache[(loff + t * kv_dim + (h / kv_mul) * head_size)..];
+            //         // get the attention weight for this timestep
+            //         let a = att[t];
+
+            //         // accumulate the weighted value into xb
+            //         for i in 0..head_size {
+            //             xb[i] += a * v[i];
+            //         }
+            //     }
+            // }
 
             // final matmul to get the output of the attention
             Transformer::matmul(&mut s.xb2, &s.xb, &w.wo[(l * dim * dim)..], dim, dim);
