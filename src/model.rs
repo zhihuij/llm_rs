@@ -2,11 +2,13 @@ use std::fs::OpenOptions;
 use std::io::Result;
 
 use byteorder::{ByteOrder, LittleEndian};
+use half::f16;
 use memmap2::Mmap;
 use rayon::prelude::*;
 
 use crate::{
     constants::{F32_SIZE, I32_SIZE},
+    gguf::{gguf_context, gguf_find_tensor, gguf_get_val_array_len, gguf_get_val_u32},
     run_state::RunState,
 };
 
@@ -48,6 +50,18 @@ impl ModelConfig {
             n_kv_heads,
             vocab_size,
             seq_len,
+        })
+    }
+
+    pub fn from_gguf(ctx: &gguf_context) -> Result<Self> {
+        Ok(ModelConfig {
+            dim: gguf_get_val_u32(&ctx, "qwen2.embedding_length") as usize,
+            hidden_dim: gguf_get_val_u32(&ctx, "qwen2.feed_forward_length") as usize,
+            n_layers: gguf_get_val_u32(&ctx, "qwen2.block_count") as usize,
+            n_heads: gguf_get_val_u32(&ctx, "qwen2.attention.head_count") as usize,
+            n_kv_heads: gguf_get_val_u32(&ctx, "qwen2.attention.head_count_kv") as usize,
+            vocab_size: gguf_get_val_array_len(&ctx, "tokenizer.ggml.tokens"),
+            seq_len: gguf_get_val_u32(&ctx, "qwen2.context_length") as usize,
         })
     }
 }
@@ -174,12 +188,210 @@ impl ModelWeights {
         })
     }
 
+    pub fn from_gguf(
+        ctx: &gguf_context,
+        model_config: &ModelConfig,
+        mapped_file: &Mmap,
+    ) -> Result<Self> {
+        let head_size = model_config.dim / model_config.n_heads;
+
+        let token_embedding_table = ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            1,
+            "token_embd.weight",
+            model_config.vocab_size * model_config.dim,
+            None,
+        );
+        let rms_att_weight = ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            model_config.n_layers,
+            "blk.{}.attn_norm.weight",
+            model_config.dim,
+            Some("f32"),
+        );
+
+        // TODO: q.bias
+        let wq = ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            model_config.n_layers,
+            "blk.{}.attn_q.weight",
+            model_config.dim * (model_config.n_heads * head_size),
+            None,
+        );
+
+        // TODO: k.bias
+        let wk = ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            model_config.n_layers,
+            "blk.{}.attn_k.weight",
+            model_config.dim * (model_config.n_kv_heads * head_size),
+            None,
+        );
+
+        // TODO: v.bias
+        let wv = ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            model_config.n_layers,
+            "blk.{}.attn_v.weight",
+            model_config.dim * (model_config.n_kv_heads * head_size),
+            None,
+        );
+
+        let wo = ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            model_config.n_layers,
+            "blk.{}.attn_output.weight",
+            (model_config.n_heads * head_size) * model_config.dim,
+            None,
+        );
+
+        let rms_ffn_weight = ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            model_config.n_layers,
+            "blk.{}.ffn_norm.weight",
+            model_config.dim,
+            Some("f32"),
+        );
+
+        let w1 = ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            model_config.n_layers,
+            "blk.{}.ffn_up.weight",
+            model_config.dim * model_config.hidden_dim,
+            None,
+        );
+
+        let w2 = ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            model_config.n_layers,
+            "blk.{}.ffn_down.weight",
+            model_config.hidden_dim * model_config.dim,
+            None,
+        );
+
+        let w3 = ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            model_config.n_layers,
+            "blk.{}.ffn_gate.weight",
+            model_config.dim * model_config.hidden_dim,
+            None,
+        );
+
+        let rms_final_weight = ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            1,
+            "output_norm.weight",
+            model_config.dim,
+            Some("f32"),
+        );
+
+        let wcls = Some(ModelWeights::create_tensor(
+            ctx,
+            mapped_file,
+            ctx.offset,
+            1,
+            "output.weight",
+            model_config.vocab_size * model_config.dim,
+            None,
+        ));
+
+        Ok(ModelWeights {
+            token_embedding_table,
+            rms_att_weight,
+            rms_ffn_weight,
+            wq,
+            wk,
+            wv,
+            wo,
+            w1,
+            w2,
+            w3,
+            rms_final_weight,
+            wcls,
+        })
+    }
+
     fn read_f32_vec(buf: &[u8], vec_size: usize, offset: usize) -> Vec<f32> {
         let mut result_vec: Vec<f32> = Vec::with_capacity(vec_size);
         for i in 0..vec_size {
             result_vec.push(LittleEndian::read_f32(
                 &buf[(i * F32_SIZE) + offset..((i + 1) * F32_SIZE) + offset],
             ));
+        }
+        result_vec
+    }
+
+    fn create_tensor(
+        ctx: &gguf_context,
+        mapped_file: &Mmap,
+        offset: usize,
+        n_layers: usize,
+        tensor_name_tpl: &str,
+        tensor_size: usize,
+        dtype: Option<&str>,
+    ) -> Vec<f32> {
+        let mut tensor_vec = Vec::with_capacity(n_layers * tensor_size);
+        for i in 0..n_layers {
+            let parts: Vec<&str> = tensor_name_tpl.split("{}").collect();
+            assert!(
+                parts.len() <= 2,
+                "Template must contain exactly 1 placeholders."
+            );
+            let tensor_name;
+            if parts.len() == 1 {
+                tensor_name = tensor_name_tpl.to_string();
+            } else {
+                tensor_name = format!("{}{}{}", parts[0], i, parts[1]);
+            }
+            let tensor = &ctx.infos[gguf_find_tensor(ctx, tensor_name.as_str())];
+
+            let mut laryer_weight;
+            if let Some("f32") = dtype {
+                laryer_weight = ModelWeights::read_f32_vec(
+                    mapped_file,
+                    tensor_size,
+                    offset + tensor.offset as usize,
+                );
+            } else {
+                laryer_weight = ModelWeights::read_f16_vec(
+                    mapped_file,
+                    tensor_size,
+                    offset + tensor.offset as usize,
+                );
+            }
+            tensor_vec.append(&mut laryer_weight);
+        }
+        return tensor_vec;
+    }
+
+    fn read_f16_vec(buf: &[u8], vec_size: usize, offset: usize) -> Vec<f32> {
+        let mut result_vec: Vec<f32> = Vec::with_capacity(vec_size);
+        for i in 0..vec_size {
+            result_vec
+                // .push(LittleEndian::read_i16(&buf[(i * 2) + offset..((i + 1) * 2) + offset]) as f32)
+                .push(f16::from_le_bytes([buf[offset + i * 2], buf[offset + i * 2 + 1]]).to_f32());
         }
         result_vec
     }
@@ -205,6 +417,19 @@ impl Transformer {
         let shared_weights = if model_config.vocab_size > 0 { 1 } else { 0 };
 
         let model_weights = ModelWeights::new(&mapped_file, &model_config, shared_weights).unwrap();
+        let run_state = RunState::new(&model_config).unwrap();
+
+        Ok(Transformer {
+            config: model_config,
+            weights: model_weights,
+            state: run_state,
+        })
+    }
+
+    pub fn from_gguf(ctx: &gguf_context) -> Result<Self> {
+        let model_config = ModelConfig::from_gguf(&ctx).unwrap();
+        let model_weights = ModelWeights::from_gguf(&ctx, &model_config, &ctx.mapped_file).unwrap();
+
         let run_state = RunState::new(&model_config).unwrap();
 
         Ok(Transformer {
@@ -358,8 +583,8 @@ impl Transformer {
 
             // qkv matmuls for this position
             Transformer::matmul(&mut s.q, &s.xb, &w.wq[(l * dim * dim)..], dim, dim);
-            Transformer::matmul(s_k, &s.xb, &w.wk[(l * dim * dim)..], dim, kv_dim);
-            Transformer::matmul(s_v, &s.xb, &w.wv[(l * dim * dim)..], dim, kv_dim);
+            Transformer::matmul(s_k, &s.xb, &w.wk[(l * dim * kv_dim)..], dim, kv_dim);
+            Transformer::matmul(s_v, &s.xb, &w.wv[(l * dim * kv_dim)..], dim, kv_dim);
 
             // RoPE relative positional encoding: complex-valued rotate q and k in each head
             for i in (0..dim).step_by(2) {

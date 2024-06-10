@@ -9,6 +9,7 @@ path = "src/llm.rs"
 
 [dependencies]
 byteorder = "1.5.0"
+half = "2.4.1"
 memmap2 = "0.9.4"
 rand = "0.8.5"
 rayon = "1.10.0"

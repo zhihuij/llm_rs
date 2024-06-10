@@ -2,12 +2,14 @@ use std::io::{self, Write};
 use std::usize;
 
 mod constants;
+mod gguf;
 mod model;
 mod run_state;
 mod sample;
 mod tokenizer;
 mod utils;
 
+use gguf::load_gguf_file;
 use model::Transformer;
 use sample::Sampler;
 use tokenizer::Tokenizer;
@@ -78,26 +80,30 @@ fn main() {
     let steps: usize = 256; // number of steps to run for
     let rng_seed: u64 = 1234; // seed rng with time by default
 
-    let checkpoint = "/Users/winpro/Documents/AIApp/llama2.c/stories15M.bin";
-    let tokenizer_path = "/Users/winpro/Documents/AIApp/llama2.c/tokenizer.bin";
+    // let model_path = "/Users/winpro/Documents/AIApp/llama2.c/stories15M.bin";
+    let model_path = "/Users/winpro/Documents/AIApp/models/qwen2-0_5b-instruct-fp16.gguf";
+    // let tokenizer_path = "/Users/winpro/Documents/AIApp/llama2.c/tokenizer.bin";
 
-    let mut transformer = Transformer::new(checkpoint).unwrap();
-    // println!("Model config: {:?}", transformer.config);
-    // println!(
-    //     "Model weights - token_embedding_table: {:?}",
-    //     &transformer.weights.token_embedding_table[..20]
-    // );
-    // println!(
-    //     "Model weights - rms_att_weight: {:?}",
-    //     &transformer.weights.rms_att_weight[..20]
-    // );
+    // let mut transformer = Transformer::new(model_path).unwrap();
+    // let tokenizer = Tokenizer::new(tokenizer_path, 32000).unwrap();
+    let ctx = load_gguf_file(model_path);
+    let mut transformer = Transformer::from_gguf(&ctx).unwrap();
+    let tokenizer = Tokenizer::from_gguf(&ctx, transformer.config.vocab_size).unwrap();
 
-    let tokenizer = Tokenizer::new(tokenizer_path, transformer.config.vocab_size).unwrap();
-    // println!("Tokenizer vocab: {:?}", &tokenizer.vocab[..10]);
-    // println!(
-    //     "Tokenizer vocab_scores: {:?}",
-    //     &tokenizer.vocab_scores[..10]
-    // );
+    println!("Model config: {:?}", &transformer.config);
+    println!(
+        "Model weights - token_embedding_table: {:?}",
+        &transformer.weights.token_embedding_table[..20]
+    );
+    println!(
+        "Model weights - rms_att_weight: {:?}",
+        &transformer.weights.rms_att_weight[..20]
+    );
+    println!("Tokenizer vocab: {:?}", &tokenizer.vocab[..10]);
+    println!(
+        "Tokenizer sorted vocab: {:?}",
+        &tokenizer.sorted_vocab[..10]
+    );
 
     let mut sampler =
         Sampler::new(transformer.config.vocab_size, temperature, topp, rng_seed).unwrap();
