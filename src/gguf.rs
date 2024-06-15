@@ -401,6 +401,14 @@ pub fn gguf_get_val_str(v: &gguf_value) -> &String {
     }
 }
 
+pub fn gguf_get_val_i32(v: &gguf_value) -> i32 {
+    if let gguf_value::int32(v) = v {
+        return *v;
+    } else {
+        panic!("invalid value type {:?}", v)
+    }
+}
+
 pub fn gguf_get_val_array_len(ctx: &gguf_context, key: &str) -> usize {
     let key_id_result = gguf_find_key(&ctx, key);
     if let Some(key_id) = key_id_result {

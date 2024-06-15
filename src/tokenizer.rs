@@ -5,10 +5,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use memmap2::Mmap;
 use regex::Regex;
 
-use crate::{
-    constants::{F32_SIZE, I32_SIZE},
-    gguf::{gguf_context, gguf_find_key, gguf_get_val_str, gguf_value},
-};
+use crate::constants::{F32_SIZE, I32_SIZE};
 
 #[derive(Debug)]
 pub struct TokenIndex {
@@ -59,52 +56,6 @@ impl Tokenizer {
                 id: i,
             });
             offset += str_len as usize;
-        }
-
-        sorted_vocab.sort_by(|a, b| a.str.cmp(&b.str));
-
-        let mut byte_pieces: Vec<u8> = Vec::new();
-        byte_pieces.resize_with(512, || 0);
-        for i in 0..256 {
-            byte_pieces[i * 2] = i as u8;
-            byte_pieces[i * 2 + 1] = b'\0';
-        }
-
-        Ok(Tokenizer {
-            vocab,
-            vocab_scores,
-            sorted_vocab,
-            vocab_size,
-            byte_pieces,
-        })
-    }
-
-    pub fn from_gguf(ctx: &gguf_context, vocab_size: usize) -> Result<Self> {
-        let mut vocab: Vec<String> = Vec::with_capacity(vocab_size);
-        let mut vocab_scores: Vec<f32> = Vec::with_capacity(vocab_size);
-        let mut sorted_vocab: Vec<TokenIndex> = Vec::with_capacity(vocab_size);
-
-        let key_id_result = gguf_find_key(&ctx, "tokenizer.ggml.tokens");
-        let token_arr;
-        if let Some(key_id) = key_id_result {
-            let value = &ctx.kv[key_id].value;
-            if let gguf_value::array(arr) = value {
-                token_arr = arr;
-            } else {
-                panic!("invalid value type {:?}", value)
-            }
-        } else {
-            panic!("invalid token key type");
-        };
-
-        for i in 0..vocab_size {
-            vocab_scores.push(0.0 as f32);
-            let token_str = gguf_get_val_str(&token_arr[i]);
-            vocab.push(token_str.clone());
-            sorted_vocab.push(TokenIndex {
-                str: token_str.clone(),
-                id: i,
-            });
         }
 
         sorted_vocab.sort_by(|a, b| a.str.cmp(&b.str));
@@ -248,29 +199,8 @@ impl Tokenizer {
 
 #[cfg(test)]
 mod tests {
-    use crate::{gguf::load_gguf_file, Tokenizer};
+    use crate::Tokenizer;
     use regex::Regex;
-
-    #[test]
-    fn test_tokenizer_gguf() {
-        let checkpoint = "/Users/winpro/Documents/AIApp/models/qwen2-0_5b-instruct-fp16.gguf";
-        let ctx = load_gguf_file(checkpoint);
-
-        let vocab_size = 151936;
-        let tokenizer = Tokenizer::from_gguf(&ctx, vocab_size).unwrap();
-
-        // let expect0 = vec![1];
-        // let result0 = tokenizer.encode("".to_string(), 1, 0);
-        // assert_eq!(expect0, result0, "equal");
-
-        let expect = vec![40, 4411, 279, 7290, 315, 2272, 374];
-        let result = tokenizer.encode("I believe the meaning of life is".to_string(), 0, 0);
-        assert_eq!(expect, result, "equal");
-
-        // let expect2 = vec![105043, 100165, 30];
-        // let result2 = tokenizer.encode("你是谁?".to_string(), 0, 0);
-        // assert_eq!(expect2, result2, "equal");
-    }
 
     #[test]
     fn test_tokenizer() {
