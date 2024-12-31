@@ -272,7 +272,7 @@ impl ModelWeights {
             mapped_file,
             ctx.offset,
             model_config.n_layers,
-            "blk.{}.ffn_up.weight",
+            "blk.{}.ffn_gate.weight",
             model_config.dim * model_config.hidden_dim,
             None,
         );
@@ -292,7 +292,7 @@ impl ModelWeights {
             mapped_file,
             ctx.offset,
             model_config.n_layers,
-            "blk.{}.ffn_gate.weight",
+            "blk.{}.ffn_up.weight",
             model_config.dim * model_config.hidden_dim,
             None,
         );
@@ -447,7 +447,8 @@ impl Transformer {
             ss += x[j] * x[j];
         }
         ss /= size as f32;
-        ss += 1e-5 as f32;
+        // ss += 1e-5 as f32;
+        ss += 1e-6 as f32;
         ss = 1.0 as f32 / ss.sqrt();
         // normalize and scale
         for j in 0..size {
@@ -589,7 +590,7 @@ impl Transformer {
             // RoPE relative positional encoding: complex-valued rotate q and k in each head
             for i in (0..dim).step_by(2) {
                 let head_dim = i % head_size;
-                let freq = 1.0 / (10000.0 as f32).powf(head_dim as f32 / head_size as f32);
+                let freq = 1.0 / (1000000.0 as f32).powf(head_dim as f32 / head_size as f32);
                 let val = pos as f32 * freq;
                 let fcr = val.cos();
                 let fci = val.sin();

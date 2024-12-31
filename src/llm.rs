@@ -78,11 +78,7 @@ fn genrate(
 
 fn apply_chat_template(msg: &str) -> String {
     return format!(
-        "<|im_start|>system
-You are a helpful assistant.<|im_end|>
-<|im_start|>user
-{}<|im_end|>
-<|im_start|>assistant",
+        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
         msg
     );
 }
@@ -95,7 +91,6 @@ fn chat_bpe(
     steps: usize,
 ) {
     let chat_msg = apply_chat_template(prompt.as_str());
-    println!("{:?}", &chat_msg);
     // encode the (string) prompt into tokens sequence
     let prompt_tokens = tokenizer.encode(chat_msg, 0, 0);
     if prompt_tokens.len() < 1 {
@@ -134,8 +129,8 @@ fn chat_bpe(
             let piece = tokenizer.decode(&vec![next]);
             print!("{}", piece);
             io::stdout().flush().unwrap();
-            token = next;
         }
+        token = next;
 
         // init the timer here because the first iteration can be slower
         if start == 0 {
@@ -183,7 +178,7 @@ fn main() {
     let mut sampler =
         Sampler::new(transformer.config.vocab_size, temperature, topp, rng_seed).unwrap();
 
-    let prompt = "I believe the meaning of life is".to_string();
+    let prompt = "写个二分查找算法".to_string();
     // genrate(&mut transformer, &tokenizer, &mut sampler, prompt, steps);
     chat_bpe(&mut transformer, &tokenizer, &mut sampler, prompt, steps);
 }
